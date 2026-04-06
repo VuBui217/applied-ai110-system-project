@@ -4,9 +4,9 @@ This document explains how to install, configure, and run the sample application
 
 ## Requirements
 
-- Python 3.9 or later  
-- pip installed  
-- A terminal or command prompt  
+- Python 3.9 or later
+- pip installed
+- A terminal or command prompt
 - Optional: a valid Gemini API key for LLM based features
 
 ## 1. Install Dependencies
@@ -35,21 +35,21 @@ Create a `.env` file or export the following variables directly in your shell.
       ```
 
 - `AUTH_SECRET_KEY`  
-Used to sign authentication tokens. Must be a non empty string.
+  Used to sign authentication tokens. Must be a non empty string.
 
-    Example:
+      Example:
 
-        ```plaintext
-        AUTH_SECRET_KEY="supersecretvalue"
-        ```
+          ```plaintext
+          AUTH_SECRET_KEY="supersecretvalue"
+          ```
 
 ### Optional Variables
 
 - `TOKEN_LIFETIME_SECONDS`  
-Controls how long access tokens remain valid.
+  Controls how long access tokens remain valid.
 
 - `GEMINI_API_KEY`  
-Enables LLM powered features such as enhanced documentation answers. Without this key, the application falls back to rule based behavior.
+  Enables LLM powered features such as enhanced documentation answers. Without this key, the application falls back to rule based behavior.
 
 ## 3. Initialize the Database
 
@@ -87,17 +87,17 @@ If you have set `GEMINI_API_KEY`, you can run the documentation assistant:
 
 This tool supports multiple modes including:
 
-- naive LLM generation  
-- retrieval only  
+- naive LLM generation
+- retrieval only
 - full RAG (retrieval plus generation)
 
 Each mode helps you explore different system behaviors.
 
 ## 6. Troubleshooting
 
-- If authentication fails, confirm that `AUTH_SECRET_KEY` is set.  
-- If database queries return errors, verify the `DATABASE_URL` format.  
-- If LLM features do not work, ensure that `GEMINI_API_KEY` is defined in the environment.  
+- If authentication fails, confirm that `AUTH_SECRET_KEY` is set.
+- If database queries return errors, verify the `DATABASE_URL` format.
+- If LLM features do not work, ensure that `GEMINI_API_KEY` is defined in the environment.
 - If installation fails, check that you are using a compatible Python version.
 
 ## 7. Resetting the Environment

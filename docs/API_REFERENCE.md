@@ -33,8 +33,8 @@ Successful Response:
 
 Notes:
 
-* Returns 401 if credentials are invalid.
-* The token must be included in the Authorization header for protected endpoints.
+- Returns 401 if credentials are invalid.
+- The token must be included in the Authorization header for protected endpoints.
 
 ### POST /api/refresh
 
@@ -78,9 +78,9 @@ Response Example:
 
 Failure Cases:
 
-* 401 if the token is missing or expired
-* 403 if the user lacks permission to view this profile
-* 404 if no user exists with the given ID
+- 401 if the token is missing or expired
+- 403 if the user lacks permission to view this profile
+- 404 if no user exists with the given ID
 
 ### GET /api/users
 
@@ -109,7 +109,7 @@ Successful Response:
 
 Notes:
 
-* Returns 403 for non admin accounts.
+- Returns 403 for non admin accounts.
 
 ## Project Data Endpoints
 
@@ -159,9 +159,9 @@ Response Example:
 
 Failure Cases:
 
-* 401 for missing token
-* 403 if caller cannot access the project
-* 404 if the project does not exist
+- 401 for missing token
+- 403 if caller cannot access the project
+- 404 if the project does not exist
 
 ## Error Formats
 
@@ -175,7 +175,7 @@ All error responses follow this structure:
 
 Common error messages include:
 
-* "Unauthorized"
-* "Forbidden"
-* "Not Found"
-* "Invalid Request"
+- "Unauthorized"
+- "Forbidden"
+- "Not Found"
+- "Invalid Request"
