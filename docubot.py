@@ -10,6 +10,8 @@ Core DocuBot class responsible for:
 import os
 import glob
 
+MIN_RETRIEVAL_SCORE = 3  # A snippet must match at least this many query words to count as evidence
+
 class DocuBot:
     def __init__(self, docs_folder="docs", llm_client=None):
         """
@@ -109,17 +111,22 @@ class DocuBot:
             if word in self.index:
                 candidate_filenames.update(self.index[word])
 
-        # Score each candidate
+        # Score each candidate at the paragraph level
         results = []
         for filename, text in self.documents:
-            if filename in candidate_filenames:
-                score = self.score_document(query, text)
-                if score > 0:
-                    results.append((score, filename, text))
+            if filename not in candidate_filenames:
+                continue
+            import re
+            raw_sections = re.split(r'(?=^#{1,3} )', text, flags=re.MULTILINE)
+            paragraphs = [s.strip() for s in raw_sections if s.strip()]
+            for paragraph in paragraphs:
+                score = self.score_document(query, paragraph)
+                if score >= MIN_RETRIEVAL_SCORE:
+                    results.append((score, filename, paragraph))
 
-        # Sort by score descending, return top_k as (filename, text)
+        # Sort by score descending, return top_k as (filename, snippet)
         results.sort(key=lambda x: x[0], reverse=True)
-        return [(filename, text) for _, filename, text in results[:top_k]]
+        return [(filename, snippet) for _, filename, snippet in results[:top_k]]
 
     # -----------------------------------------------------------
     # Answering Modes
