@@ -64,7 +64,13 @@ class DocuBot:
         ignore punctuation if needed.
         """
         index = {}
-        # TODO: implement simple indexing
+        for filename, text in documents:
+            for word in text.lower().split():
+                word = word.strip(".,!?;:\"'()[]{}")
+                if word not in index:
+                    index[word] = []
+                if filename not in index[word]:
+                    index[word].append(filename)
         return index
 
     # -----------------------------------------------------------
@@ -81,8 +87,13 @@ class DocuBot:
         - Count how many appear in the text
         - Return the count as the score
         """
-        # TODO: implement scoring
-        return 0
+        score = 0
+        text_lower = text.lower()
+        for word in query.lower().split():
+            word = word.strip(".,!?;:\"'()[]{}")
+            if word in text_lower:
+                score += 1
+        return score
 
     def retrieve(self, query, top_k=3):
         """
@@ -91,9 +102,24 @@ class DocuBot:
 
         Return a list of (filename, text) sorted by score descending.
         """
+        # Find candidate docs from the index
+        candidate_filenames = set()
+        for word in query.lower().split():
+            word = word.strip(".,!?;:\"'()[]{}")
+            if word in self.index:
+                candidate_filenames.update(self.index[word])
+
+        # Score each candidate
         results = []
-        # TODO: implement retrieval logic
-        return results[:top_k]
+        for filename, text in self.documents:
+            if filename in candidate_filenames:
+                score = self.score_document(query, text)
+                if score > 0:
+                    results.append((score, filename, text))
+
+        # Sort by score descending, return top_k as (filename, text)
+        results.sort(key=lambda x: x[0], reverse=True)
+        return [(filename, text) for _, filename, text in results[:top_k]]
 
     # -----------------------------------------------------------
     # Answering Modes
