@@ -8,6 +8,7 @@ __pycache__/
 venv/
 .env/
 .env.bak/
+.venv
 
 # Environment variables
 *.env
