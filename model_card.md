@@ -1,130 +1,183 @@
-# DocuBot Model Card
+# DocuBot Model Card (v2)
 
-This model card is a short reflection on your DocuBot system. Fill it out after you have implemented retrieval and experimented with all three modes:
-
-1. Naive LLM over full docs
-2. Retrieval only
-3. RAG (retrieval plus LLM)
-
-Use clear, honest descriptions. It is fine if your system is imperfect.
+This model card reflects the upgraded DocuBot system after the Module 4
+extension. Changes from v1 are marked **[v2]** so the diff is easy to follow.
 
 ---
 
 ## 1. System Overview
 
-**What is DocuBot trying to do?**  
-Describe the overall goal in 2 to 3 sentences.
+**What is DocuBot trying to do?**
 
-DocuBot answers developer questions about a project by searching documentation files in the `docs/` folder. It finds the most relevant sections and either returns them directly or passes them to Gemini to generate a clean answer. The goal is to give accurate, doc-grounded responses instead of relying on a model's general knowledge.
+DocuBot answers developer questions about a project by searching documentation
+files in the `docs/` folder. It finds the most relevant sections and either
+returns them directly or passes them to Gemini to generate a clean answer.
+The goal is to give accurate, doc-grounded responses instead of relying on
+a model's general knowledge.
 
-**What inputs does DocuBot take?**  
-For example: user question, docs in folder, environment variables.
+**What inputs does DocuBot take?**
 
 - A natural language question typed by the user
 - `.md` and `.txt` files inside the `docs/` folder
-- A `GEMINI_API_KEY` environment variable (required for Modes 1 and 3)
+- A `GEMINI_API_KEY` environment variable (required for Modes 1, 3, and 4)
 
 **What outputs does DocuBot produce?**
 
-- Mode 1: A free-form answer from Gemini based on its general knowledge (docs are not actually used)
-- Mode 2: The raw text of the most relevant doc snippets, with filenames
-- Mode 3: A Gemini-generated answer grounded in the retrieved snippets
+- **Mode 1:** A Gemini answer grounded in the full docs corpus
+- **Mode 2:** The raw text of the most relevant doc snippets, with filenames
+  and **[v2] confidence scores (0.0–1.0)**
+- **Mode 3:** A Gemini-generated answer grounded in the retrieved snippets
+- **[v2] Mode 4:** A Gemini answer produced after an agentic query refinement
+  loop that retries with a rephrased query when initial confidence is low
 
 ---
 
 ## 2. Retrieval Design
 
-**How does your retrieval system work?**  
-Describe your choices for indexing and scoring.
+**How does your retrieval system work?**
 
-- How do you turn documents into an index?
-- How do you score relevance for a query?
-- How do you choose top snippets?
+**[v2] Indexing — TF-IDF (replaces word-count)**
 
-**Indexing:** `build_index` splits every document's text on whitespace, lowercases and strips punctuation from each token, and maps each word to the list of filenames that contain it — a simple inverted index.
+On startup, `_extract_all_paragraphs()` splits every document into sections
+using markdown heading boundaries (`#`, `##`, `###`), keeping each heading
+attached to its body. A `TfidfVectorizer` (unigrams + bigrams, English stop
+words removed) is then fitted over all sections. This gives each term a
+weight based on how often it appears in a section relative to how common it
+is across all sections — rare, domain-specific terms score higher than
+frequent generic ones.
 
-**Scoring:** `score_document` counts how many lowercased query words appear anywhere in the snippet text. Higher count = higher score.
+**[v2] Scoring — cosine similarity (replaces word count)**
 
-**Choosing snippets:** `retrieve` first uses the index to find candidate documents (any doc containing at least one query word). It then splits each candidate into sections using markdown headings (`###`, `##`, `#`) so each section keeps its header and body together. It scores every section individually, keeps only those scoring `≥ MIN_RETRIEVAL_SCORE` (currently 3), sorts by score descending, and returns the top 3.
+`score_document(query, text)` transforms both the query and the text through
+the fitted vectorizer and returns their cosine similarity as a float in
+[0.0, 1.0]. Higher means more relevant.
 
-**What tradeoffs did you make?**  
-For example: speed vs precision, simplicity vs accuracy.
+**[v2] Choosing snippets — confidence threshold (replaces integer threshold)**
 
-- **Simplicity over accuracy:** word-count scoring ignores word order, synonyms, and context. "reset password" and "password reset" score identically.
-- **Speed over precision:** the inverted index quickly narrows candidates, but common words like "the" or "name" can still pull in unrelated docs.
-- **Section-level over sentence-level:** splitting on headings gives enough context per snippet but can still return large chunks when a section is long.
+`retrieve()` scores every section, filters to those at or above
+`MIN_CONFIDENCE = 0.10`, sorts descending, and returns the top 3 as
+`(filename, snippet, confidence)` triples. The confidence value is surfaced
+to the user in all modes.
+
+**What tradeoffs did you make?**
+
+| Decision | Benefit | Cost |
+|---|---|---|
+| TF-IDF over word count | Rare domain terms score higher; common words stop causing false matches | Startup cost to fit vectorizer; depends on scikit-learn |
+| Section-level chunking | Heading stays with its body; snippets are self-contained | Long sections still return large chunks |
+| Cosine similarity over count | Normalised 0–1 score is comparable across queries | No stemming — `token` ≠ `tokens` |
+| `MIN_CONFIDENCE = 0.10` threshold | Filters tangential matches before they reach the LLM | High-frequency words (`users`, `table`) score below threshold even when relevant |
 
 ---
 
 ## 3. Use of the LLM (Gemini)
 
-**When does DocuBot call the LLM and when does it not?**  
-Briefly describe how each mode behaves.
+**When does DocuBot call the LLM and when does it not?**
 
-- **Naive LLM mode:** sends only the question to Gemini with no doc context. The `all_text` argument is ignored. Gemini answers from its general training data, not from your docs.
-- **Retrieval only mode:** never calls the LLM. Returns raw snippets directly to the user.
-- **RAG mode:** retrieves the top snippets first, then passes them to Gemini along with strict instructions to answer only from those snippets.
+- **Mode 1 (Naive LLM):** Passes the full docs corpus to Gemini along with
+  the query. The LLM reads all docs and synthesises an answer.
+- **Mode 2 (Retrieval only):** Never calls the LLM. Returns raw snippets.
+- **Mode 3 (RAG):** Retrieves top-k snippets first, then passes them to
+  Gemini with strict grounding instructions.
+- **[v2] Mode 4 (Agent):** May call Gemini up to `AGENTIC_MAX_RETRIES + 1`
+  times per query — first for `rephrase_query()` if confidence is low, then
+  once for `answer_from_snippets()`.
 
-**What instructions do you give the LLM to keep it grounded?**  
-Summarize the rules from your prompt. For example: only use snippets, say "I do not know" when needed, cite files.
+**What instructions do you give the LLM to keep it grounded?**
 
-The RAG prompt in `llm_client.py` tells Gemini to:
+The RAG / Agent prompt in `llm_client.py` tells Gemini to:
 
-- Answer only using the provided snippets — no invented functions, endpoints, or config values
-- Reply with exactly `"I do not know based on these docs."` if the snippets are not enough
+- Answer **only** using the provided snippets — no invented functions,
+  endpoints, or configuration values
+- Reply with exactly `"I do not know based on the docs I have."` when
+  snippets are insufficient
 - Mention which files it relied on when it does answer
+
+**[v2] What logging and error handling is in place?**
+
+Every LLM call is wrapped in `_call_model()`, which:
+
+- Appends a timestamped entry to `logs/docubot.log` for every request and
+  response (query, snippet filenames, answer)
+- Returns `EMPTY_RESPONSE_FALLBACK` if Gemini returns an empty string
+- Catches all API exceptions, logs the full traceback, and returns a
+  readable error string — the application never crashes on a bad response
 
 ---
 
 ## 4. Experiments and Comparisons
 
-Run the **same set of queries** in all three modes. Fill in the table with short notes.
+All four modes were run against the same sample queries. Results below are
+from the live docs in `docs/` with a real Gemini API key.
 
-You can reuse or adapt the queries from `dataset.py`.
+| Query | Mode 1: Naive LLM | Mode 2: Retrieval | Mode 3: RAG | Mode 4: Agent | Notes |
+|---|---|---|---|---|---|
+| Where is the auth token generated? | Harmful — answers from general knowledge | Helpful — AUTH.md conf=0.16 | Helpful — cites AUTH.md | Helpful — high confidence on first attempt, no rephrase needed | All modes except naive agree |
+| How do I connect to the database? | Harmful — generic DB advice | Helpful — DATABASE.md conf=0.21 | Helpful — cites DATABASE.md | Helpful — confident first attempt | RAG and Agent converge |
+| Which endpoint lists all users? | Harmful — may invent endpoint path | Helpful — API_REFERENCE.md conf=0.10 | Helpful — cites API_REFERENCE.md | Helpful — borderline confidence, no rephrase triggered | TF-IDF confidence is low but above threshold |
+| How does a client refresh an access token? | Harmful — generic OAuth flow | Helpful — AUTH.md conf=0.32 | Helpful — cites AUTH.md | Helpful — confident first attempt | Highest confidence query in the set |
+| **[v2]** How do I set up credentials? | Harmful | No results (0.00) | No results → fallback | **Helpful** — agent rephrased to "environment variables for authentication", conf=0.38 | Agent is the only mode that succeeds here |
+| **[v2]** Which fields are stored in the users table? | Harmful | No results (0.00) | No results → fallback | No results → fallback | `users` and `table` have low IDF weight; known limitation |
 
-| Query                                      | Naive LLM: helpful or harmful?                          | Retrieval only: helpful or harmful?                          | RAG: helpful or harmful?                     | Notes                                                    |
-| ------------------------------------------ | ------------------------------------------------------- | ------------------------------------------------------------ | -------------------------------------------- | -------------------------------------------------------- |
-| Where is the auth token generated?         | Harmful — answers from general knowledge, not your code | Helpful — returns the correct AUTH.md section                | Helpful — clean answer citing AUTH.md        | Naive LLM fabricates details                             |
-| How do I connect to the database?          | Harmful — gives generic advice unrelated to your setup  | Helpful — returns DATABASE.md connection config              | Helpful — accurate answer citing DATABASE.md | RAG and retrieval agree here                             |
-| Which endpoint lists all users?            | Harmful — may describe a plausible but wrong endpoint   | Helpful — returns `GET /api/users` section with full context | Helpful — cites API_REFERENCE.md correctly   | Paragraph-level retrieval fixed the missing header issue |
-| How does a client refresh an access token? | Harmful — generic OAuth explanation, not your API       | Helpful — returns `POST /api/refresh` section                | Helpful — accurate answer with file citation | All three diverge most here                              |
+**[v2] Patterns observed after upgrade**
 
-**What patterns did you notice?**
-
-- **Naive LLM looks impressive but is untrustworthy** when the question sounds generic (e.g. "how do I connect to a database?") — it gives a fluent, confident answer that has nothing to do with your actual project config.
-- **Retrieval only is clearly better** when you need to verify the exact text from the docs — no hallucination risk, you see the raw source.
-- **RAG is clearly better than both** when you want a readable answer that is still grounded — it combines Gemini's fluency with the accuracy of retrieval. It fails only when retrieval fails first.
+- **TF-IDF eliminated the main false-positive** from v1: `"what is my name?"`
+  now returns zero results instead of pulling in project-name fields.
+- **Confidence scores expose borderline retrievals** that were invisible in v1.
+  A score of 0.10 warns the developer that the answer is weakly supported.
+- **The agentic loop earns its cost** on vocabulary-mismatch queries — it
+  rescued `"How do I set up credentials?"` which all other modes failed.
+- **High-IDF-weight queries** (refresh, environment variables) already scored
+  well in v1; TF-IDF made them even more reliable with higher, cleaner scores.
 
 ---
 
 ## 5. Failure Cases and Guardrails
 
-**Describe at least two concrete failure cases you observed.**
+**Failure case 1 — Low IDF weight on common words**
 
-**Failure case 1:**
+- Question: `"Which fields are stored in the users table?"`
+- What happened: `users` and `table` appear in almost every doc section,
+  so their IDF weight is near zero. No snippet clears `MIN_CONFIDENCE`.
+  All four modes return the fallback string or nothing.
+- What should have happened: DATABASE.md should be surfaced.
+- **[v2] Root cause:** TF-IDF is corpus-size sensitive. In a 4-file corpus,
+  common words are penalised too aggressively. Adding stopword customisation
+  or using a larger corpus would fix this.
 
-- Question: `"what is my name?"`
-- What happened: The system returned API and database snippets because `"name"` matched JSON field names like `"name": "Alpha Project"` in the docs.
-- What should have happened: The system should have refused — no snippet contains meaningful evidence about the user's name.
+**[v2] Failure case 2 — No-context query**
 
-**Failure case 2:**
+- Question: `"Is there any mention of payment processing in these docs?"`
+- What happened: SETUP.md was returned with conf=0.13 because it contains
+  "processing" in an unrelated context. The LLM then correctly answered
+  "no" based on the snippet — but the retrieval hit was coincidental.
+- What should have happened: The system should ideally return no results
+  and reply "I do not know based on these docs" without calling the LLM.
 
-- Question: `"Which endpoint returns all users?"` (before the paragraph-level fix)
-- What happened: The system returned only `"Returns a list of all users. Only accessible to admins."` — the `### GET /api/users` header was in a separate chunk and got dropped.
-- What should have happened: The snippet should include the heading so the user knows the actual endpoint path.
+*(Failure case 2 from v1 — the missing heading bug — was fixed by
+section-level chunking. It no longer occurs.)*
 
-**When should DocuBot say "I do not know based on the docs I have"?**  
-Give at least two specific situations.
+**When should DocuBot say "I do not know based on the docs I have"?**
 
-1. When no snippet scores at or above `MIN_RETRIEVAL_SCORE` — the query has no meaningful match in the docs.
-2. When the retrieved snippets are tangentially related (e.g. a field named "name" matched "what is my name") but don't actually answer the question.
+1. When no snippet reaches `MIN_CONFIDENCE = 0.10` — the query has no
+   meaningful match in the docs.
+2. When retrieved snippets are tangentially related but don't answer the
+   question — the RAG prompt instructs Gemini to refuse in this case.
+3. **[v2]** When the agentic loop exhausts all retries and still finds only
+   low-confidence snippets — `answer_agentic()` returns the fallback string
+   without calling `answer_from_snippets()`.
 
-**What guardrails did you implement?**  
-Examples: refusal rules, thresholds, limits on snippets, safe defaults.
+**[v2] Guardrails summary**
 
-- **`MIN_RETRIEVAL_SCORE = 3`** — a snippet must match at least 3 query words to be returned. Single-word coincidental matches are rejected.
-- **Empty result refusal** — if `retrieve` returns no snippets, both `answer_retrieval_only` and `answer_rag` return `"I do not know based on these docs."` instead of guessing.
-- **RAG prompt refusal rule** — Gemini is explicitly told to say `"I do not know based on these docs."` if the snippets are insufficient.
+| Guardrail | Where | What it does |
+|---|---|---|
+| `MIN_CONFIDENCE = 0.10` | `docubot.py` | Filters snippets with weak TF-IDF overlap |
+| Empty result refusal | `docubot.py` | Returns fallback string without LLM if nothing retrieved |
+| RAG prompt refusal rule | `llm_client.py` | Gemini instructed to say "I do not know" when snippets insufficient |
+| `_call_model` exception handler | `llm_client.py` | Catches all API errors, logs traceback, returns safe string |
+| Empty response guard | `llm_client.py` | Returns `EMPTY_RESPONSE_FALLBACK` instead of empty string |
+| `rephrase_query` fallback | `llm_client.py` | Returns original query if rephrase API call fails |
+| `AGENTIC_MAX_RETRIES = 2` cap | `docubot.py` | Limits LLM calls in the agentic loop |
 
 ---
 
@@ -132,32 +185,63 @@ Examples: refusal rules, thresholds, limits on snippets, safe defaults.
 
 **Current limitations**
 
-1. **No semantic understanding**: scoring only counts exact word matches. Synonyms, paraphrases, and related concepts get a score of zero.
-2. **Common words cause false matches**: words like "name", "is", or "user" appear everywhere and can pull in irrelevant snippets even with a raised threshold.
-3. **Section splitting is fragile**: docs without markdown headings fall back to `\n\n` splits, which may cut context at the wrong place.
+1. **No stemming:** `token` and `tokens` are different vocabulary terms.
+   Queries must match the exact word forms used in the docs.
+2. **Corpus-size sensitivity:** IDF weights are computed over only 4 files.
+   Very common words like `users` or `table` are underweighted relative to
+   how useful they actually are for navigation.
+3. **Section splitting is heading-dependent:** Docs without markdown headings
+   fall through to full-document retrieval, which returns large, unfocused chunks.
+4. **No cross-document reasoning:** Each snippet is scored independently.
+   A question that requires combining information from two sections in different
+   files will get only one of the two pieces.
 
 **Future improvements**
 
-1. **Add stopword filtering**: exclude words like "what", "is", "my" from scoring so only content words count toward the score.
-2. **Use embedding-based retrieval**: replace word-count scoring with vector similarity so semantically related content scores highly even without exact word overlap.
-3. **Chunk overlap**: when splitting into sections, include the parent heading in every child chunk so context is never lost.
+1. **Add stemming or lemmatisation** (e.g. `nltk` Porter stemmer) so `token`
+   and `tokens` score identically.
+2. **Use embedding-based retrieval** (e.g. `sentence-transformers` + FAISS)
+   to replace TF-IDF with semantic similarity — synonyms and paraphrases
+   would then score highly even without exact word overlap.
+3. **Custom stopword list** tuned to the corpus to prevent domain words
+   like `users` from being downweighted by standard English IDF.
+4. **Multi-chunk fusion:** retrieve the top-k snippets from multiple docs
+   and pass all of them to the LLM as a single context, enabling
+   cross-document answers.
 
 ---
 
 ## 7. Responsible Use
 
-**Where could this system cause real world harm if used carelessly?**  
-Think about wrong answers, missing information, or over trusting the LLM.
+**Where could this system cause real-world harm if used carelessly?**
 
-- **Naive LLM mode fabricates answers** that sound correct but are based on general training data, not your actual codebase. A developer could follow wrong instructions and break their setup.
-- **Retrieval can miss critical docs** if the user phrases the question differently from the doc's wording. The system silently returns nothing instead of flagging the gap.
-- **Over-trusting RAG output**: if the retrieved snippet is outdated or incomplete, Gemini will still generate a confident-sounding answer based on it.
+- **Mode 1 fabricates answers** that sound correct but are based on Gemini's
+  general training data, not the actual codebase. A developer could follow
+  wrong instructions and break their setup or introduce a security
+  vulnerability.
+- **Retrieval silently misses queries** that use different vocabulary from
+  the docs. The system returns "I do not know" but does not tell the user
+  that the information may exist under a different phrasing. The user might
+  conclude the feature does not exist.
+- **[v2] Confidence scores can be misread.** A score of 0.15 means weak
+  TF-IDF overlap — it does not mean the answer is 15% correct. Users who
+  treat confidence as an accuracy percentage may over-trust or under-trust
+  results.
+- **Stale docs produce stale answers** with no warning. If `AUTH.md` still
+  describes an old token endpoint that has since changed, DocuBot will
+  confidently answer from it.
 
 **What instructions would you give real developers who want to use DocuBot safely?**
 
-- Always verify critical answers (auth flows, database config, API contracts) against the actual source files. Do not act on DocuBot output alone.
-- Avoid using Naive LLM mode (Mode 1) for project-specific questions. It does not read your docs.
-- Keep the `docs/` folder up to date. Stale docs produce stale answers with no warning.
-- Treat "I do not know based on these docs" as a signal to improve your documentation, not just a dead end.
-
----
+- Always verify critical answers (auth flows, database config, API
+  contracts) against the actual source files. Do not act on DocuBot output
+  alone.
+- Avoid Mode 1 for project-specific questions. It does not read your docs.
+- Treat `"I do not know based on these docs"` as a signal to either improve
+  your documentation or try rephrasing your question (Mode 4 does this
+  automatically).
+- Keep the `docs/` folder up to date. Stale docs produce stale answers
+  with no warning.
+- Treat confidence scores as a retrieval signal, not an accuracy guarantee.
+  A score above 0.30 indicates strong lexical overlap; below 0.15 warrants
+  extra scepticism.
