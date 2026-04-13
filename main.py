@@ -1,10 +1,12 @@
 """
-CLI runner for the DocuBot tinker activity.
+CLI runner for DocuBot.
 
-Supports three modes:
-1. Naive LLM generation over all docs (Phase 0)
-2. Retrieval only (Phase 1)
-3. RAG: retrieval plus LLM generation (Phase 2)
+Supports four modes:
+1. Naive LLM  — Gemini answers from the full docs corpus (no retrieval)
+2. Retrieval  — TF-IDF search returns snippets with confidence scores (no LLM)
+3. RAG        — TF-IDF retrieval feeds grounded snippets to Gemini
+4. Agent      — multi-step query refinement loop: retrieves, checks confidence,
+                rephrases with Gemini if needed, then answers
 """
 
 from dotenv import load_dotenv
@@ -33,18 +35,14 @@ def try_create_llm_client():
 def choose_mode(has_llm):
     """
     Asks the user which mode to run.
-    Returns "1", "2", "3", or "q".
+    Returns "1", "2", "3", "4", or "q".
     """
+    unavailable = " (unavailable, no GEMINI_API_KEY)"
     print("Choose a mode:")
-    if has_llm:
-        print("  1) Naive LLM over full docs (no retrieval)")
-    else:
-        print("  1) Naive LLM over full docs (unavailable, no GEMINI_API_KEY)")
-    print("  2) Retrieval only (no LLM)")
-    if has_llm:
-        print("  3) RAG (retrieval + LLM)")
-    else:
-        print("  3) RAG (unavailable, no GEMINI_API_KEY)")
+    print(f"  1) Naive LLM over full docs (no retrieval){'' if has_llm else unavailable}")
+    print("  2) Retrieval only — TF-IDF with confidence scores (no LLM)")
+    print(f"  3) RAG — retrieval + LLM{'' if has_llm else unavailable}")
+    print(f"  4) Agent — multi-step query refinement + LLM{'' if has_llm else unavailable}")
     print("  q) Quit")
 
     choice = input("Enter choice: ").strip().lower()
@@ -129,6 +127,34 @@ def run_rag_mode(bot, has_llm):
         print()
 
 
+def run_agentic_mode(bot, has_llm):
+    """
+    Mode 4: agentic multi-step query refinement.
+
+    For each query the agent:
+      1. Retrieves snippets with the original query.
+      2. Checks average confidence.
+      3. If confidence is low, asks Gemini to rephrase and retries.
+      4. Answers using the best snippets found across all attempts.
+
+    Intermediate steps are printed so the reasoning chain is visible.
+    """
+    if not has_llm or bot.llm_client is None:
+        print("\nAgent mode is not available (no GEMINI_API_KEY).\n")
+        return
+
+    queries, label = get_query_or_use_samples()
+    print(f"\nRunning agent mode on {label}...\n")
+
+    for query in queries:
+        print("=" * 60)
+        print(f"Question: {query}\n")
+        answer = bot.answer_agentic(query)
+        print("Answer:")
+        print(answer)
+        print()
+
+
 def main():
     print("DocuBot Tinker Activity")
     print("=======================\n")
@@ -148,8 +174,10 @@ def main():
             run_retrieval_only_mode(bot)
         elif choice == "3":
             run_rag_mode(bot, has_llm)
+        elif choice == "4":
+            run_agentic_mode(bot, has_llm)
         else:
-            print("\nUnknown choice. Please pick 1, 2, 3, or q.\n")
+            print("\nUnknown choice. Please pick 1, 2, 3, 4, or q.\n")
 
 
 if __name__ == "__main__":
